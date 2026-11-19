@@ -16,6 +16,7 @@ const post = (url, body) => fetch(url + '/api/review', {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
 });
 const completion = findings => Response.json({ choices: [{ message: { content: JSON.stringify({ findings }) } }] });
+const postJson = (url, body) => fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 
 test('无密钥时仅启用本地审核，私有配置不作为静态资源提供', async t => {
   const url = await launch(t);
@@ -50,4 +51,37 @@ test('空文档和过长文档在提交给模型前返回错误', async t => {
   assert.equal((await post(url, { ...docs, bid: ' ' })).status, 400);
   assert.equal((await post(url, { ...docs, tender: '示'.repeat(60001) })).status, 413);
   assert.equal(calls, 0);
+});
+
+test('模型编写仅接收当前条款、证明材料和已有草稿', async t => {
+  const material = { requirement:'请提交团队业绩证明。', evidence:'附件目录第3项', draft:'' };
+  const proposed = { draft:'【待补：项目名称与合同证明】', gaps:['核实合同页码'] };
+  const url = await launch(t, config, (_url, options) => {
+    assert.deepEqual(JSON.parse(JSON.parse(options.body).messages.at(-1).content),material);
+    return Response.json({choices:[{message:{content:JSON.stringify(proposed)}}]});
+  });
+  const res = await postJson(url+'/api/draft',{...material,privateNotes:'不应发送'});
+  assert.equal(res.status,200);
+  assert.deepEqual(await res.json(),proposed);
+});
+
+test('条款级 AI 拒绝摘录以外的模型引文，本机模型可免密钥', async t => {
+  const url = await launch(t, {baseUrl:'http://127.0.0.1:11434/v1',model:'local'},(_url,options)=>{
+    assert.equal(options.headers.Authorization,undefined);
+    return Response.json({choices:[{message:{content:JSON.stringify({assessment:'摘录支持',reason:'已找到',evidence:'不在原文'})}}]});
+  });
+  assert.deepEqual(await (await fetch(url+'/api/status')).json(),{ai:true});
+  assert.equal((await postJson(url+'/api/check-clause',{requirement:docs.tender,evidence:docs.bid})).status,502);
+});
+
+test('无模型配置也能导出标准 Word 文档，空清单返回校验错误', async t => {
+  const url = await launch(t);
+  const payload = { title:'项目响应',entries:[{section:'商务',title:'交付',requirement:docs.tender,response:docs.bid}] };
+  const response = await postJson(url+'/api/export/docx', payload);
+  assert.equal(response.status,200);
+  assert.match(response.headers.get('content-type'),/wordprocessingml/);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  assert.equal(bytes.readUInt32LE(0),0x04034b50);
+  assert.ok(bytes.includes(Buffer.from('word/document.xml')));
+  assert.equal((await postJson(url+'/api/export/docx',{...payload,entries:[]})).status,400);
 });

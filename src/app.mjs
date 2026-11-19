@@ -1,266 +1,1002 @@
 import { sample, review } from './review.mjs';
-import { extractText } from './extract.mjs';
+import { extractRequirements } from './requirements.mjs';
+import {
+  createProject,
+  getProject,
+  listProjects,
+  saveProject,
+  deleteProject,
+  mergeRequirements,
+  exportBackup,
+  importBackup,
+} from './projects.mjs';
+import { mountMatchPanel } from './match-panel.mjs';
+import {
+  esc,
+  icon,
+  btn,
+  views,
+  groupName,
+  statusLabels,
+  priorityLabels,
+  dateText,
+  projectHeader,
+  matrixView,
+  matrixRows,
+  filteredRows,
+  rowInspector,
+  writingView,
+  reviewView,
+  activeChecklist,
+} from './views.mjs';
+import {
+  $,
+  openModal,
+  closeModal,
+  notify,
+  errMessage,
+  cancel,
+  fileEditor,
+  fileRoles,
+  readFile,
+  showSource,
+  pageAt,
+  sparseText,
+  manualForm,
+  download,
+  csv,
+  report,
+} from './dialogs.mjs';
 
-const paths = {
-  help: '<circle cx="12" cy="12" r="9"/><path d="M9.3 9a2.7 2.7 0 015.4 0c0 2-2.7 2.1-2.7 4.2M12 16.5h.01"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>',
-  folder: '<path d="M3 8V6a1.5 1.5 0 011.5-1.5H10l2 2H20A1.5 1.5 0 0121.5 8v10A1.5 1.5 0 0120 19.5H4.5A1.5 1.5 0 013 18zM3 9h18"/>',
-  files: '<path d="M8 3h7l4 4v13H8zM15 3v5h4M5 7H4v14h10"/>',
-  file: '<path d="M6 3h8l4 4v14H6zM14 3v5h4M9 12h6M9 16h5"/>',
-  refresh: '<path d="M20 10a8 8 0 00-14-4L3 9m0-5v5h5M4 14a8 8 0 0014 4l3-3m0 5v-5h-5"/>',
-  download: '<path d="M12 3v11m-4-4 4 4 4-4M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/>',
-  details: '<path d="M5 3h9l4 4v4M14 3v5h4M5 3v18h6M8 12h3M8 16h2"/><circle cx="16" cy="16" r="3.5"/><path d="m18.5 18.5 3 3"/>',
-  chevron: '<path d="m9 6 6 6-6 6"/>',
-  link: '<path d="M13 5h6v6M11 13l8-8M9 6H5v13h13v-4"/>',
-  bulb: '<path d="M8.5 16.5c0-2-3-3.4-3-7a6.5 6.5 0 1113 0c0 3.6-3 5-3 7zM9 19h6m-5 2h4"/>',
-  upload: '<path d="M12 16V4m-4 4 4-4 4 4M4 15v4a1 1 0 001 1h14a1 1 0 001-1v-4"/>',
-  close: '<path d="m6 6 12 12M18 6 6 18"/>',
-  alert: '<path d="M10.5 4.8a1.7 1.7 0 013 0L21 18.3a1.4 1.4 0 01-1.2 2.1H4.2A1.4 1.4 0 013 18.3zM12 9v4.5M12 17h.01"/>',
-  info: '<circle cx="12" cy="12" r="9"/><path d="M12 10.5v6M12 7h.01"/>',
-};
-const icon = name => '<svg aria-hidden="true" class="ico" viewBox="0 0 24 24">' + paths[name] + '</svg>';
-document.querySelectorAll('[data-icon]').forEach(el => el.outerHTML = icon(el.dataset.icon));
-const $ = selector => document.querySelector(selector);
-const escape = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-const labels = { high: '高风险', medium: '中风险', low: '低风险' };
-const roles = {tender:'招标文件', bid:'投标文件'};
-const missing = '未定位到对应投标摘录，请核对完整原文。';
-const initialNames = {tender:'示例招标文件', bid:'示例投标文件'};
-let project = {...sample, findings:review(sample.tender, sample.bid), names:initialNames, mode:'local', isSample:true};
-let filter = 'all';
-let selectedId = project.findings[0]?.id;
-let aiAvailable = false;
-let abortReview;
-let draft;
-let toastTimer;
+let p,
+  ai = false,
+  view = 'matrix',
+  rowId = '',
+  risk = '',
+  findingId = '';
+let state, activeController, pendingAI, pendingDelete;
+let saveTimer,
+  writingSave,
+  revision = 0,
+  committed = 0,
+  saveError = '';
+let fileMode;
 const dialog = $('#dialog');
-
-function notify(message) {
-  $('#toast').textContent = message;
-  $('#toast').classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => $('#toast').classList.remove('show'), 2600);
+document.querySelectorAll('[data-icon]').forEach((node) => (node.outerHTML = icon(node.dataset.icon)));
+function currentRow() {
+  return p?.requirements.find((row) => row.id === rowId);
 }
-
-function pill(severity) {
-  return '<span class="pill '+severity+'">'+icon(severity === 'low' ? 'info':'alert')+labels[severity]+'</span>';
+function resetFilters() {
+  state = { search: '', category: '', status: '', priority: '', check: '', page: 0 };
+  risk = '';
+  findingId = '';
 }
-
-function sourceQuote(role, text) {
-  const title = role === 'tender' ? '招标要求' : '投标响应';
-  return '<section class="quote"><div class="quote-head"><h4>'+icon('file')+title+'</h4><button class="source-link" data-action="source" data-role="'+role+'">查看原文'+icon('link')+'</button></div><blockquote>'+escape(text || missing)+'</blockquote></section>';
+function setIndicator(text, kind = '') {
+  const el = $('#save-status');
+  el.className = 'save-status ' + kind;
+  el.textContent = text;
 }
-
-function renderFindings() {
-  const group = project.findings.filter(f => filter === 'all' || f.severity === filter);
-  const finding = group.find(f => f.id === selectedId) ?? group[0];
-  selectedId = finding?.id;
-  $('#findings').innerHTML = group.length ? group.map(f => {
-    const selected = selectedId === f.id;
-    return '<button class="finding '+(selected ? 'selected':'')+'" aria-pressed="'+selected+'" data-action="select" data-id="'+escape(f.id)+'"><span class="finding-top">'+pill(f.severity)+'<span>'+escape(f.category)+'</span></span><span class="finding-title">'+escape(f.title)+'</span><span class="finding-excerpt">'+escape(f.requirement)+'</span><span class="finding-arrow">'+icon('chevron')+'</span></button>';
-  }).join('') : '<p class="empty">'+(filter === 'all' ? '本次未识别到风险线索，仍需结合原文复核。':'当前筛选下没有审核发现。')+'</p>';
-  const header = '<div class="detail-head"><h3>'+icon('details')+'证据详情</h3>'+(finding ? '<small>'+String(project.findings.indexOf(finding)+1).padStart(2,'0')+' / '+String(project.findings.length).padStart(2,'0')+'</small>':'')+'</div>';
-  $('#detail').innerHTML = header+(finding ? '<div class="detail-body"><div class="detail-title">'+pill(finding.severity)+'<h4>'+escape(finding.title)+'</h4></div>'+sourceQuote('tender', finding.requirement)+sourceQuote('bid',finding.evidence)+'<div class="advice"><h4>'+icon('bulb')+'复核建议</h4><p>'+escape(finding.suggestion)+'</p></div></div>' : '<p class="empty">选择有审核发现的分类以查看原文依据。</p>');
+function changed() {
+  revision++;
+  clearTimeout(saveTimer);
+  setIndicator('待自动保存', 'pending');
+  saveTimer = setTimeout(() => flush().catch(() => {}), 260);
 }
-
+async function flush() {
+  clearTimeout(saveTimer);
+  if (writingSave) return writingSave;
+  if (!p || committed === revision) return;
+  writingSave = (async () => {
+    try {
+      setIndicator('正在保存…', 'pending');
+      while (committed !== revision) {
+        const source = p,
+          nextRevision = revision;
+        const saved = await saveProject(source);
+        if (p !== source) return;
+        source.version = saved.version;
+        source.updatedAt = saved.updatedAt;
+        committed = nextRevision;
+      }
+      saveError = '';
+      setIndicator('已自动保存 · 本机', 'saved');
+    } catch (error) {
+      saveError = error.message || '无法写入本机项目库';
+      setIndicator('保存失败 · 查看处理', 'error');
+      throw error;
+    }
+  })().finally(() => {
+    writingSave = null;
+  });
+  return writingSave;
+}
+function remember(id) {
+  try {
+    localStorage.setItem('biaoheng.active-project', id);
+  } catch {}
+}
+function activate(project, section = 'matrix') {
+  p = project;
+  view = section;
+  rowId = p.requirements[0]?.id || '';
+  resetFilters();
+  revision = committed = 0;
+  saveError = '';
+  remember(p.id);
+  setIndicator('已自动保存 · 本机', 'saved');
+  render();
+}
 function render() {
-  $('#project-title').textContent = project.title;
-  $('#sample-tag').hidden = !project.isSample;
-  $('#mode-label').textContent = project.mode === 'ai' ? 'AI 模型审核' : '本地规则审核';
-  $('#result-count').textContent = project.findings.length;
-  const counts = {all:project.findings.length};
-  for (const level of Object.keys(labels)) counts[level] = project.findings.filter(f => f.severity === level).length;
-  $('#stats').innerHTML = Object.entries(labels).map(([k,v]) => '<div class="stat"><strong>'+counts[k]+'</strong><small><i class="sev-dot '+k+'"></i>'+v+'</small></div>').join('');
-  $('#filters').innerHTML = Object.entries({all:'全部', ...labels}).map(([k,v]) => '<button class="filter '+(filter === k ? 'selected':'')+'" aria-pressed="'+(filter === k)+'" data-action="filter" data-filter="'+k+'">'+v+'<small>'+counts[k]+'</small></button>').join('');
-  renderFindings();
-}
-
-function openModal(title, body, actions = '') {
-  $('#dialog-content').innerHTML = '<header class="dialog-head"><h2 id="dialog-title">'+escape(title)+'</h2><button data-action="close" class="close" aria-label="关闭">'+icon('close')+'</button></header>'+body+(actions ? '<div class="dialog-actions">'+actions+'</div>':'');
-  if (!dialog.open) dialog.showModal();
-  dialog.scrollTop = 0;
-}
-
-let fileAnchor;
-function showFiles(role = 'tender', anchor = null) {
-  fileAnchor = anchor;
-  const selected = project[role];
-  const fragment = anchor && (role === 'bid' ? anchor.evidence : anchor.requirement);
-  const start = fragment ? selected.indexOf(fragment) : -1;
-  const text = start < 0 ? escape(selected) : escape(selected.slice(0,start))+'<mark>'+escape(fragment)+'</mark>'+escape(selected.slice(start+fragment.length));
-  const tabs = Object.entries(roles).map(([key,label]) => '<button class="file-tab '+(key === role ? 'selected':'')+'" aria-pressed="'+(key===role)+'" data-action="file-tab" data-role="'+key+'">'+icon('file')+label+'</button>').join('');
-  openModal('项目文件','<div class="dialog-body"><div class="file-tabs">'+tabs+'</div><div class="file-name">'+escape(project.names[role])+' · '+selected.length.toLocaleString('zh-CN')+' 字符</div><pre class="file-text">'+text+'</pre></div>');
-  $('#dialog-content mark')?.scrollIntoView({block:'nearest'});
-}
-
-function showHelp() {
-  openModal('使用说明','<div class="dialog-body"><ul class="help-list"><li><h3>准备两份文件</h3><p>点击「新建审核」，分别选择招标和投标文件，或粘贴提取后的正文。支持 TXT、DOCX 和文字版 PDF，每份上限 10 MB。扫描件可先识别为文字再粘贴。</p></li><li><h3>选择审核方式</h3><p>本地规则在浏览器内运行，核查已覆盖的条款。配置模型服务后，可选择 AI 审核并同意发送两份正文。</p></li><li><h3>复核并导出</h3><p>按风险等级筛选发现，打开「查看原文」核实摘录。「导出报告」会下载当前项目的完整审核结果。</p></li><li><h3>文件留存</h3><p>项目仅保存在当前页面，刷新后会恢复示例。建议在离开前导出报告，并由项目负责人复核最终结论。</p></li></ul></div>');
-}
-
-function editor(role) {
-  return '<section class="editor"><label for="text-'+role+'">'+icon('file')+roles[role]+'</label><input type="file" data-file="'+role+'" accept=".txt,.pdf,.docx" hidden><button class="upload" data-action="upload" data-role="'+role+'">'+icon('upload')+'选择文件</button><textarea id="text-'+role+'" placeholder="或在此粘贴'+roles[role]+'正文" required></textarea><small id="name-'+role+'"></small></section>';
-}
-
-function modeHint() {
-  const mode = $('#review-mode');
-  if (!mode) return;
-  $('#mode-hint').textContent = mode.value === 'ai' ? '选择 AI 审核并点击开始后，将向已配置的模型服务发送两份正文，每份限 60,000 字符。' : (aiAvailable ? '文件内容仅在当前浏览器内处理。' : '文件内容仅在当前浏览器内处理。配置服务端模型后可启用 AI 审核。');
-}
-
-function openEditor(reuse = false) {
-  draft = {names:reuse ? {...project.names} : {tender:'',bid:''},pending:0, busy:false};
-  const choices = '<option value="local">本地规则审核</option><option value="ai" '+(aiAvailable ? '':'disabled')+'>AI 模型审核'+(aiAvailable ? '' : '（未配置）')+'</option>';
-  openModal(reuse ? '重新审核':'新建审核','<div class="dialog-body"><label class="field-label" for="project-name">项目名称</label><input type="text" id="project-name" placeholder="输入项目名称（选填）" maxlength="100"><div class="editor-grid">'+editor('tender')+editor('bid')+'</div><p class="helper">支持 DOCX、文字版 PDF、TXT。单份上限 10 MB，正文限 120,000 字符。</p><div class="mode-panel"><label for="review-mode" class="field-label">审核方式</label><select id="review-mode">'+choices+'</select><p id="mode-hint" class="helper"></p></div><p role="alert" id="editor-error" class="field-error"></p></div>','<button data-action="close" class="outline-btn">取消</button><button id="run" data-action="run" class="primary">开始审核</button>');
-  for (const role of Object.keys(roles)) {
-    if (reuse) $('#text-'+role).value = project[role];
-    $('#name-'+role).textContent = draft.names[role] || '尚未选择文件';
-  }
-  if (reuse) $('#project-name').value = project.title;
-  modeHint();
-}
-
-async function readFile(input) {
-  const [file] = input.files;
-  if (!file) return;
-  const state = draft;
-  const role = input.dataset.file;
-  state.pending++;
-  $('#run').disabled = true;
-  const area = $('#text-'+role);
-  const upload = input.nextElementSibling;
-  const previousStatus = $('#name-'+role).textContent;
-  upload.disabled = true;
-  area.readOnly = true;
-  $('#name-'+role).textContent = '正在提取 '+file.name;
-  $('#editor-error').textContent = '';
-  try {
-    const value = await extractText(file);
-    if (draft !== state) return;
-    area.value = value;
-    state.names[role] = file.name;
-    $('#name-'+role).textContent = file.name+' · '+value.length.toLocaleString('zh-CN')+' 字符';
-  } catch (error) {
-    if (draft === state) {
-      $('#name-'+role).textContent = previousStatus;
-      $('#editor-error').textContent = roles[role]+'读取失败。'+error.message;
-    }
-  } finally {
-    if (draft === state) {
-      state.pending--;
-      $('#run').disabled = state.pending > 0;
-      input.value = '';
-      upload.disabled = area.readOnly = false;
-    }
-  }
-}
-
-async function runReview() {
-  if (!draft || draft.busy || draft.pending) return;
-  const state = draft;
-  const tender = $('#text-tender').value.trim();
-  const bid = $('#text-bid').value.trim();
-  const title = $('#project-name').value.trim() || state.names.tender.replace(/\.[^.]+$/,'') || '未命名审核项目';
-  const mode = $('#review-mode').value;
-  const error = $('#editor-error');
-  if (!tender || !bid) {
-    error.textContent = '请分别提供招标文件和投标文件的正文。';
-    $(!tender ? '#text-tender':'#text-bid').focus();
+  document.querySelectorAll('[data-view]').forEach((el) => {
+    el.classList.toggle('active', el.dataset.view === view);
+    if (el.dataset.view === view) el.setAttribute('aria-current', 'page');
+    else el.removeAttribute('aria-current');
+  });
+  $('#breadcrumb').textContent = views[view] || '项目库';
+  if (!p) {
+    $('#workspace').innerHTML =
+      '<section class="surface empty-action">' +
+      icon('projects') +
+      '<h1>创建投标项目</h1><p>从招标文件开始拆解要求，也可以从项目备份恢复工作。</p><div>' +
+      btn('new', '新建项目', 'primary', 'add') +
+      btn('restore', '导入备份', 'btn', 'up') +
+      '</div></section>';
     return;
   }
-  const limit = mode === 'ai' ? 60000 : 120000;
-  if (Math.max(tender.length,bid.length) > limit) {
-    error.textContent = '当前模式每份正文限 '+limit.toLocaleString('zh-CN')+' 字符，请选取对应章节。';
+  $('#workspace').innerHTML =
+    projectHeader(p) +
+    (view === 'matrix'
+      ? matrixView(p, state)
+      : view === 'writing'
+        ? writingView(p, rowId)
+        : reviewView(p, risk, findingId));
+  if (view === 'matrix') renderRows();
+  if (view === 'writing') renderInspector();
+}
+function renderRows() {
+  const rows = filteredRows(p, state);
+  state.page = Math.min(state.page, Math.max(0, Math.ceil(rows.length / 12) - 1));
+  if (!rows.slice(state.page * 12, (state.page + 1) * 12).some((r) => r.id === rowId))
+    rowId = rows[state.page * 12]?.id || '';
+  $('#matrix-rows').innerHTML = activeChecklist(state) + matrixRows(rows, rowId, state.page);
+  renderInspector();
+}
+function renderInspector() {
+  const row = currentRow(),
+    target = $('#row-detail');
+  target.innerHTML = rowInspector(row, view === 'writing', ai);
+  if (!row) return;
+  const page = pageAt(p.tender, row.start ?? p.tender.indexOf(row.quote));
+  if (page) target.querySelector('.quote-panel small').append(' · ' + page);
+  const container = document.createElement('div');
+  container.id = 'evidence-match';
+  target.querySelector('.fields').before(container);
+  if (row.needsReview && row.status === 'na') {
+    const notice = target.querySelector('.notice');
+    notice.textContent = '该旧版条款已标记不适用，保留在内部矩阵中。';
+  }
+  mountMatchPanel(container, {
+    quote: row.quote,
+    bid: p.bid,
+    aiAvailable: ai,
+    onUse: (excerpt, location) => {
+      if (currentRow() !== row || !container.isConnected) return;
+      for (const [key, value] of [
+        ['evidence', excerpt],
+        ['sourceLocation', location],
+      ]) {
+        if (value && !row[key].includes(value))
+          row[key] = [row[key], value].filter(Boolean).join(key === 'sourceLocation' ? '；' : '\n');
+        target.querySelector('[data-field="' + key + '"]').value = row[key];
+      }
+      changed();
+      notify('已添加证据及其位置');
+    },
+  });
+}
+function updateListing() {
+  if (view === 'matrix') {
+    const rows = filteredRows(p, state);
+    $('#matrix-rows').innerHTML = activeChecklist(state) + matrixRows(rows, rowId, state.page);
+  }
+}
+function edit(field, value) {
+  const row = currentRow();
+  if (!row) return;
+  if (field === 'status' && value === 'na' && !row.evidence.trim()) {
+    notify('请先在事实与证明材料中记录不适用理由。');
+    $('[data-field="status"]').value = row.status;
     return;
   }
-  state.busy = true;
-  error.textContent = '';
-  $('#dialog-content').querySelectorAll('input,textarea,select,.upload,#run').forEach(el => el.disabled = true);
-  $('#run').textContent = '审核中…';
+  if (field === 'evidence' && row.status === 'na' && !value.trim()) {
+    row.status = 'todo';
+    $('[data-field="status"]').value = 'todo';
+  }
+  if (field === 'status' && value === 'ready' && (!row.response.trim() || row.needsReview)) {
+    notify(row.needsReview ? '请先更新原文定位，再标记已复核。' : '请先填写响应正文，再标记已复核。');
+    $('[data-field="status"]').value = row.status;
+    return;
+  }
+  if (field === 'response' && row.response !== value && row.status === 'ready') {
+    row.status = 'draft';
+    $('[data-field="status"]').value = 'draft';
+  }
+  row[field] = value;
+  changed();
+  updateListing();
+  const header = document.createElement('div');
+  header.innerHTML = projectHeader(p);
+  $('.project-hero').replaceWith(header.firstElementChild);
+  if (field === 'status') render();
+  else if (field === 'outlineSection' && view === 'writing') {
+    const host = document.createElement('div');
+    host.innerHTML = writingView(p, rowId);
+    $('.outline').replaceWith(host.querySelector('.outline'));
+  }
+}
+async function openLibrary() {
+  await flush();
+  const items = await listProjects();
+  const rows = items
+    .map(
+      (item) =>
+        '<article class="library-row"><button data-action="open-project" data-id="' +
+        esc(item.id) +
+        '">' +
+        icon('projects') +
+        '<span><b>' +
+        esc(item.title) +
+        '</b><small>' +
+        item.requirementCount +
+        ' 项条款 · ' +
+        item.readyCount +
+        ' 项已复核 · ' +
+        dateText(item.updatedAt) +
+        '</small></span></button><button class="link danger" data-action="delete" data-id="' +
+        esc(item.id) +
+        '" data-version="' +
+        item.version +
+        '">删除</button></article>',
+    )
+    .join('');
+  openModal(
+    '项目库',
+    rows || '<p>尚无保存的项目。</p>',
+    btn('restore', '导入项目备份', 'btn', 'up') + btn('new', '新建项目', 'primary', 'add'),
+  );
+}
+function openFiles() {
+  if (!p) return openLibrary();
+  openModal(
+    '项目文件',
+    Object.entries(fileRoles)
+      .map(
+        ([key, label]) =>
+          '<section class="library-row"><div class="source-meta">' +
+          icon('file') +
+          '<span><b>' +
+          label +
+          '</b><small>' +
+          esc(p.names[key] || (p[key] ? '粘贴正文' : '尚未添加')) +
+          ' · ' +
+          p[key].length.toLocaleString() +
+          ' 字符</small></span></div>' +
+          (p[key]
+            ? '<button class="link" data-action="read-source" data-role="' + key + '">阅读原文</button>'
+            : '') +
+          '</section>',
+      )
+      .join('') +
+      (sparseText(p.tender) || sparseText(p.bid)
+        ? '<p class="notice">' + sparseText(p.tender + p.bid) + '</p>'
+        : ''),
+    btn('edit-files', '更新项目文件', 'btn', 'write') + btn('close', '完成', 'primary'),
+  );
+}
+function fileForm(mode) {
+  fileMode = mode;
+  const isNew = mode === 'new',
+    isReview = mode === 'review',
+    reused = !isNew;
+  const title = isNew ? '新建投标项目' : isReview ? '运行定稿审核' : '更新项目文件';
+  const intro = isNew
+    ? '上传招标文件后即可建立响应矩阵，投标文件可以稍后添加。'
+    : isReview
+      ? '请核对当前投标定稿。此次结果关联下方投标正文。'
+      : '更换招标正文后将重建条款清单，并保留已编写的记录供核对。正文变更会清除旧的审核结果。';
+  let body = '<p class="form-intro">' + intro + '</p>';
+  if (!isReview)
+    body +=
+      '<label class="simple-field">项目名称<input id="project-name" maxlength="200" placeholder="默认使用招标文件名称" value="' +
+      esc(reused ? p.title : '') +
+      '"></label>' +
+      fileEditor('tender', reused ? p.names.tender : '', reused ? p.tender : '');
+  body += fileEditor('bid', reused ? p.names.bid : '', reused ? p.bid : '');
+  if (isReview)
+    body +=
+      '<label class="simple-field">审核方式<select id="review-mode"><option value="local">本地规则审核</option><option value="ai" ' +
+      (ai ? '' : 'disabled') +
+      '>AI 模型审核' +
+      (ai ? '' : '（未配置）') +
+      '</option></select></label><p class="helper" id="mode-hint">本地核对量化条款与常见材料要求。</p>';
+  openModal(
+    title,
+    body,
+    cancel + btn('submit-files', isNew ? '创建并拆解条款' : isReview ? '开始审核' : '保存更新', 'primary'),
+  );
+}
+async function jsonCall(url, body, signal) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || '请求失败，请重试。');
+  return result;
+}
+async function submitFiles(button) {
+  if (button.disabled) return;
+  if (document.querySelector('[data-file]:disabled')) throw new Error('请等文件读取完毕再继续。');
+  const mode = fileMode,
+    isNew = mode === 'new',
+    isReview = mode === 'review';
+  const tender = isReview ? p.tender : $('#text-tender').value.trim(),
+    bid = $('#text-bid').value.trim();
+  if (!tender || (isReview && !bid))
+    throw new Error(isReview ? '请提供完整的投标文件正文。' : '请上传招标文件或粘贴招标正文。');
+  const reviewMode = $('#review-mode')?.value || 'local';
+  const limit = reviewMode === 'ai' ? 60000 : 120000;
+  if (Math.max(tender.length, bid.length) > limit)
+    throw new Error('当前模式每份正文限 ' + limit.toLocaleString() + ' 字符，请选择对应标段或章节。');
+  const title =
+    $('#project-name')?.value.trim() || $('#name-tender')?.dataset.name || (isNew ? '未命名项目' : p.title);
+  const names = {
+    tender: isReview ? p.names.tender : $('#name-tender').dataset.name || '粘贴的招标正文',
+    bid: bid ? $('#name-bid').dataset.name || '粘贴的投标正文' : '',
+  };
+  const controller = new AbortController();
+  activeController = controller;
+  const fields = $('#dialog-content').querySelectorAll('input,textarea,select,[data-action="submit-files"]');
+  const label = button.textContent;
+  fields.forEach((el) => (el.disabled = true));
+  button.textContent = isReview ? '正在审核…' : '保存中…';
   try {
-    let findings;
-    if (mode === 'ai') {
-      abortReview = new AbortController();
-      const response = await fetch('/api/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tender,bid}),signal:abortReview.signal});
-      const result = await response.json();
-      if (!response.ok || !Array.isArray(result.findings)) throw new Error(result.error || '模型响应异常，请重试。');
-      findings = result.findings;
+    await flush();
+    if (controller.signal.aborted) return;
+    if (isNew) {
+      const item = createProject({ title, tender, bid, names, requirements: extractRequirements(tender) });
+      activate(await saveProject(item));
+      closeModal();
+      notify('项目已建立，条款已拆解');
+      return;
+    }
+    const replacedBid = Boolean(p.bid && p.bid !== bid);
+    if (isReview) {
+      const result =
+        reviewMode === 'ai'
+          ? (await jsonCall('/api/review', { tender, bid }, controller.signal)).findings
+          : review(tender, bid);
+      if (controller.signal.aborted) return;
+      Object.assign(p, {
+        bid,
+        names,
+        findings: result,
+        reviewedAt: new Date().toISOString(),
+        mode: reviewMode,
+      });
+      view = 'review';
+      risk = '';
+      findingId = '';
     } else {
-      findings = review(tender,bid);
+      if (tender !== p.tender || bid !== p.bid) {
+        p.findings = [];
+        p.reviewedAt = null;
+      }
+      if (tender !== p.tender) {
+        p.requirements = mergeRequirements(p.requirements, extractRequirements(tender));
+        for (const row of p.requirements.filter((r) => r.manual || r.needsReview)) {
+          const offset = tender.indexOf(row.quote);
+          const unique = offset >= 0 && tender.indexOf(row.quote, offset + 1) < 0;
+          row.start = unique ? offset : null;
+          row.end = unique ? offset + row.quote.length : null;
+          row.line = unique ? tender.slice(0, offset).split('\n').length : null;
+          row.needsReview = !unique;
+          if (row.needsReview && row.status === 'ready') row.status = 'draft';
+        }
+        rowId = p.requirements[0]?.id || '';
+        resetFilters();
+      }
+      Object.assign(p, { title, tender, bid, names });
     }
-    if (draft !== state) return;
-    const names = {tender:state.names.tender || '粘贴的招标文件正文',bid:state.names.bid || '粘贴的投标文件正文'};
-    project = {title,tender,bid,names,mode,findings,isSample:tender === sample.tender && bid === sample.bid};
-    selectedId = findings[0]?.id;
-    filter = 'all';
+    if (replacedBid) {
+      for (const row of p.requirements) {
+        if (row.status === 'ready') row.status = 'draft';
+      }
+    }
+    if (tender !== sample.tender || bid !== sample.bid) p.isSample = false;
+    changed();
+    await flush();
+    closeModal();
     render();
-    dialog.close();
-    notify('审核完成，共发现 '+findings.length+' 条风险线索');
-  } catch (err) {
-    if (draft === state && err.name !== 'AbortError') error.textContent = err.message || '审核失败，请重试。';
+    notify(
+      replacedBid
+        ? '投标正文已变更，原已复核条款已转为编写中，请复核其证明位置。'
+        : isReview
+          ? '审核结果已保存'
+          : '文件已更新',
+    );
   } finally {
-    if (draft === state && dialog.open) {
-      state.busy = false;
-      $('#dialog-content').querySelectorAll('input,textarea,select,.upload,#run').forEach(el => el.disabled = false);
-      $('#run').textContent = '开始审核';
+    if (activeController === controller) activeController = null;
+    if (button.isConnected) {
+      fields.forEach((el) => (el.disabled = false));
+      button.textContent = label;
+    }
+  }
+}
+function addRow(update = false) {
+  const row = update ? currentRow() : null;
+  openModal(
+    update ? '更新条款原文' : '补录招标条款',
+    '<p class="form-intro">从当前招标正文复制条款。系统会核对引文并记录其位置。</p>' + manualForm(row),
+    cancel + btn(update ? 'save-anchor' : 'save-row', '保存条款', 'primary'),
+  );
+}
+function saveRow(update) {
+  const title = $('#manual-title').value.trim(),
+    quote = $('#manual-quote').value.trim();
+  if (!title || !quote) throw new Error('请填写条款标题并粘贴招标原文。');
+  const offset = p.tender.indexOf(quote);
+  if (offset < 0) throw new Error('引文未匹配当前招标正文，请复制原文中的连续文字。');
+  if (p.tender.indexOf(quote, offset + 1) >= 0)
+    throw new Error('该段文字在原文中出现多次，请包含前后相邻文字以定位。');
+  const row = update
+    ? currentRow()
+    : {
+        id: crypto.randomUUID(),
+        manual: true,
+        status: 'todo',
+        response: '',
+        evidence: '',
+        sourceLocation: '',
+        outlineSection: '',
+        owner: '',
+        section: '',
+      };
+  Object.assign(row, {
+    title,
+    quote,
+    category: $('#manual-category').value,
+    priority: $('#manual-priority').value,
+    needsReview: false,
+    start: offset,
+    end: offset + quote.length,
+    line: p.tender.slice(0, offset).split('\n').length,
+  });
+  if (!update) p.requirements.push(row);
+  rowId = row.id;
+  resetFilters();
+  state.page = Math.floor(p.requirements.indexOf(row) / 12);
+  changed();
+  closeModal();
+  render();
+  notify('条款已保存');
+}
+function exportMenu() {
+  openModal(
+    '项目导出',
+    '<div class="export-list">' +
+      [
+        ['docx', 'write', 'Word 响应稿', '汇总适用条款及响应。不适用、原文待重定位的条款仅保留在内部矩阵。'],
+        ['csv', 'matrix', '响应矩阵 CSV', '包含负责人、状态、条款、证明材料及其位置。'],
+        ['backup', 'projects', '项目备份 JSON', '保存两份正文、全部编写记录与最近一次审核，可在项目库恢复。'],
+        ...(p.reviewedAt
+          ? [['report', 'check', '审核报告 Markdown', '最近一次文件审核的发现、原文与建议。']]
+          : []),
+      ]
+        .map(
+          ([act, glyph, title, description]) =>
+            '<button data-action="' +
+            act +
+            '">' +
+            icon(glyph) +
+            '<span><b>' +
+            title +
+            '</b><small>' +
+            description +
+            '</small></span>' +
+            icon('down') +
+            '</button>',
+        )
+        .join('') +
+      '</div>',
+  );
+}
+async function word(button) {
+  if (!p.requirements.length) throw new Error('请先添加至少一项招标条款。');
+  button.disabled = true;
+  try {
+    const entries = p.requirements
+      .filter((r) => r.status !== 'na' && !r.needsReview)
+      .map((r) => ({
+        section: groupName(r),
+        title: r.title,
+        requirement: r.quote,
+        response: r.response,
+        evidence: r.evidence,
+        owner: r.owner,
+        status: r.status,
+      }));
+    if (!entries.length) throw new Error('没有可导出的适用条款，请先核对矩阵。');
+    const response = await fetch('/api/export/docx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: p.title, entries }),
+    });
+    if (!response.ok) {
+      const msg = await response.json().catch(() => ({}));
+      throw new Error(msg.error || 'Word 导出失败。');
+    }
+    download(await response.blob(), p.title + '-响应稿.docx');
+  } finally {
+    button.disabled = false;
+  }
+}
+function exportMatrix() {
+  const rows = [
+    [
+      '招标章节',
+      '要求类别',
+      '类型',
+      '条款标题',
+      '招标原文',
+      '原文位置',
+      '负责人',
+      '状态',
+      '编写章节',
+      '响应正文',
+      '事实依据',
+      '证明位置',
+      '原文需复核',
+    ],
+  ];
+  for (const r of p.requirements)
+    rows.push([
+      r.section,
+      r.category,
+      priorityLabels[r.priority],
+      r.title,
+      r.quote,
+      [pageAt(p.tender, r.start), r.line ? '第 ' + r.line + ' 行' : ''].filter(Boolean).join(' · '),
+      r.owner,
+      statusLabels[r.status],
+      groupName(r),
+      r.response,
+      r.evidence,
+      r.sourceLocation,
+      r.needsReview ? '是' : '否',
+    ]);
+  download(csv(rows), p.title + '-响应矩阵.csv');
+}
+function showAI() {
+  if (!ai) {
+    openModal(
+      'AI 辅助起草',
+      '<p>在服务端 .env 配置 AI_BASE_URL、AI_MODEL、AI_API_KEY 并重启。启用后可基于当前条款和证明资料生成候选响应。</p>',
+      btn('close', '完成', 'primary'),
+    );
+    return;
+  }
+  const row = currentRow();
+  openModal(
+    'AI 辅助起草',
+    '<p>提交后将把当前条款、事实与证明材料、已有响应正文发送给已配置的模型。请先确认材料适合发送。</p><div class="quote-panel"><b>' +
+      esc(row.title) +
+      '</b><blockquote>' +
+      esc(row.quote) +
+      '</blockquote></div><p class="helper">生成的候选文本需人工核实，确认后才会添加到响应正文。</p>',
+    cancel + btn('generate', '发送并生成', 'primary', 'sparkle'),
+  );
+}
+async function generate(button) {
+  if (button.disabled) return;
+  const row = currentRow(),
+    controller = new AbortController();
+  activeController = controller;
+  button.disabled = true;
+  button.textContent = '生成中…';
+  try {
+    const result = await jsonCall(
+      '/api/draft',
+      { requirement: row.quote, evidence: row.evidence, draft: row.response },
+      controller.signal,
+    );
+    if (controller.signal.aborted || !dialog.open) return;
+    pendingAI = { rowId: row.id, text: result.draft };
+    openModal(
+      '确认候选响应',
+      '<label class="simple-field">可编辑候选文本<textarea rows="7" id="candidate">' +
+        esc(result.draft) +
+        '</textarea></label>' +
+        (result.gaps?.length
+          ? '<div class="notice"><b>需核实或补充</b><ul>' +
+            result.gaps.map((g) => '<li>' + esc(g) + '</li>').join('') +
+            '</ul></div>'
+          : ''),
+      cancel + btn('apply-draft', row.response ? '追加到已有正文' : '采用候选正文', 'primary'),
+    );
+  } finally {
+    if (activeController === controller) activeController = null;
+    if (button.isConnected) {
+      button.disabled = false;
+      button.textContent = '发送并生成';
     }
   }
 }
 
-function downloadReport() {
-  const lines = ['# '+project.title, '', '招投标文件审核报告', '', '审核方式  '+$('#mode-label').textContent, '招标文件  '+project.names.tender,'投标文件  '+project.names.bid, '审核发现  '+project.findings.length+' 条',''];
-  for (const [index,f] of project.findings.entries()) {
-    lines.push('## '+(index+1)+'. '+f.title,'',labels[f.severity]+' · '+f.category,'','招标要求','',f.requirement,'','投标响应','',f.evidence || missing,'','复核建议','',f.suggestion,'');
-  }
-  if (!project.findings.length) lines.push('本次未识别到风险线索。','');
-  lines.push('本报告供项目人员复核，最终结论请结合完整文件确认。');
-  const url = URL.createObjectURL(new Blob(['\uFEFF'+lines.join('\n')],{type:'text/markdown;charset=utf-8'}));
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = project.title.replace(/[\\/:*?"<>|]/g,'_').slice(0,75)+'-审核报告.md';
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url),1000);
-  notify('已生成完整审核报告');
+function backup() {
+  download(new Blob([exportBackup(p)], { type: 'application/json' }), p.title + '-项目备份.json');
 }
-
-document.addEventListener('click', event => {
-  const button = event.target.closest('[data-action]');
-  if (!button) return;
-  const {action,id,role} = button.dataset;
-  switch(action) {
-    case 'workspace': window.scrollTo({top:0,behavior:'smooth'}); break;
-    case 'new': openEditor(); break;
-    case 'redo': openEditor(true); break;
-    case 'files': showFiles(); break;
-    case 'file-tab': showFiles(role,fileAnchor); break;
-    case 'source': showFiles(role,project.findings.find(f => f.id === selectedId)); break;
-    case 'help': showHelp(); break;
-    case 'close': dialog.close(); break;
-    case 'filter': filter = button.dataset.filter; render(); $('.filter.selected')?.focus({preventScroll:true}); break;
-    case 'select':
-      selectedId = id;
-      renderFindings();
-      $('.finding.selected')?.focus({preventScroll:true});
-      if (matchMedia('(max-width:760px)').matches) $('#detail').scrollIntoView({block:'start'});
+function showHelp() {
+  openModal(
+    '工作台使用说明',
+    '<div class="help-sections"><h3>读标与分工</h3><p>创建项目并导入招标文件，按章核对候选条款，在矩阵分配负责人。发现漏项时可复制招标原文补录。</p><h3>编写与复核</h3><p>在每项条款下记录响应正文、证明材料及页码。编写章节决定 Word 稿的大纲。负责人为本机记录，可用 CSV 分发分工。</p><h3>答疑与定稿</h3><p>项目文件中可更新更正后的招标正文。已编写的旧条款会保留以便核对。根据最终投标文件运行定稿审核，查看发现及引文。</p><h3>本机保存</h3><p>项目、资料保存在当前浏览器和地址下。清理浏览器数据会删除记录，请定期导出 JSON 项目备份。</p></div>',
+    btn('close', '完成', 'primary'),
+  );
+}
+async function switchProject(item) {
+  await flush();
+  if (!item) throw new Error('未找到该项目，请重新打开项目库。');
+  activate(item);
+  closeModal();
+  window.scrollTo(0, 0);
+}
+async function materials(reuse) {
+  const { openMaterials } = await import('./materials.mjs');
+  const row = currentRow();
+  openMaterials(
+    reuse && row
+      ? {
+          onUse: (text, location) => {
+            if (currentRow() !== row) return;
+            if (text) row.evidence = [row.evidence, text].filter(Boolean).join('\n');
+            if (location) row.sourceLocation = [row.sourceLocation, location].filter(Boolean).join('；');
+            changed();
+            renderInspector();
+            notify('已引用企业材料');
+          },
+        }
+      : {},
+  );
+}
+async function handle(action, button) {
+  const { id, role } = button.dataset;
+  switch (action) {
+    case 'close':
+      closeModal();
       break;
-    case 'upload': $('[data-file="'+role+'"]').click(); break;
-    case 'run': runReview(); break;
-    case 'export': downloadReport(); break;
+    case 'projects':
+      await openLibrary();
+      break;
+    case 'materials':
+      await materials(false);
+      break;
+    case 'use-materials':
+      await materials(true);
+      break;
+    case 'new':
+      fileForm('new');
+      break;
+    case 'open-project':
+      await switchProject(await getProject(id));
+      break;
+    case 'files':
+      await openFiles();
+      break;
+    case 'edit-files':
+      fileForm('edit');
+      break;
+    case 'read-source':
+      showSource(p, role);
+      break;
+    case 'submit-files':
+      await submitFiles(button);
+      break;
+    case 'choose':
+      rowId = id;
+      render();
+      if (matchMedia('(max-width:900px)').matches) $('#row-detail')?.scrollIntoView({ block: 'start' });
+      break;
+    case 'add-row':
+      addRow();
+      break;
+    case 'reanchor':
+      addRow(true);
+      break;
+    case 'save-anchor':
+      saveRow(true);
+      break;
+    case 'save-row':
+      saveRow(false);
+      break;
+    case 'filter-status':
+      state.status = id;
+      state.page = 0;
+      render();
+      break;
+    case 'checklist':
+      resetFilters();
+      state.check = id;
+      view = 'matrix';
+      render();
+      break;
+    case 'clear-check':
+      state.check = '';
+      render();
+      break;
+    case 'prev':
+      state.page--;
+      renderRows();
+      break;
+    case 'next':
+      state.page++;
+      renderRows();
+      break;
+    case 'source-row': {
+      const r = currentRow();
+      showSource(p, 'tender', r.quote, r.start ?? -1);
+      break;
+    }
+    case 'export-menu':
+      exportMenu();
+      break;
+    case 'docx':
+      await word(button);
+      break;
+    case 'csv':
+      exportMatrix();
+      break;
+    case 'backup':
+      backup();
+      break;
+    case 'restore':
+      $('#restore-file').click();
+      break;
+    case 'delete': {
+      pendingDelete = { id, version: Number(button.dataset.version) };
+      const name = button.closest('article').querySelector('b').textContent;
+      openModal(
+        '删除项目',
+        '<p>将从本机项目库删除「' +
+          esc(name) +
+          '」及其条款、草稿和审核记录。已有 JSON 备份可以重新导入。</p>',
+        btn('projects', '取消') + btn('delete-confirm', '确认删除', 'danger-btn'),
+      );
+      break;
+    }
+    case 'delete-confirm': {
+      if (!pendingDelete) return;
+      const target = pendingDelete;
+      await deleteProject(target.id, target.version);
+      pendingDelete = null;
+      if (target.id === p?.id) {
+        const next = (await listProjects())[0];
+        if (next) activate(await getProject(next.id));
+        else {
+          p = null;
+          remember('');
+          render();
+          setIndicator('本机项目库', 'saved');
+        }
+      }
+      closeModal();
+      notify('项目已删除');
+      break;
+    }
+    case 'review-run':
+      fileForm('review');
+      break;
+    case 'risk':
+      risk = id;
+      findingId = '';
+      render();
+      break;
+    case 'finding':
+      findingId = id;
+      render();
+      break;
+    case 'source-finding': {
+      const group = p.findings.filter((f) => !risk || risk === f.severity);
+      const f = group.find((item) => item.id === findingId) || group[0];
+      showSource(p, role, role === 'bid' ? f.evidence : f.requirement);
+      break;
+    }
+    case 'report':
+      report(p);
+      break;
+    case 'ai-draft':
+      showAI();
+      break;
+    case 'generate':
+      await generate(button);
+      break;
+    case 'apply-draft': {
+      const row = currentRow(),
+        candidate = $('#candidate').value.trim();
+      if (!candidate || pendingAI?.rowId !== row.id) throw new Error('请确认候选响应内容。');
+      row.response = [row.response, candidate].filter(Boolean).join('\n\n');
+      row.status = 'draft';
+      changed();
+      pendingAI = null;
+      closeModal();
+      render();
+      notify('候选内容已添加到响应正文');
+      break;
+    }
+    case 'help':
+      showHelp();
+      break;
+    case 'model-info':
+      openModal(
+        '模型连接',
+        ai
+          ? '<p>服务端已配置模型。可从条款详情选择 AI 辅助起草，在候选摘录中逐条核查，或从定稿审核选择 AI 模型审核。每次发送前可核对资料范围。</p>'
+          : '<p>在项目目录将 .env.example 复制为 .env，填写 AI_BASE_URL、AI_MODEL 与 AI_API_KEY，然后重启本机服务并刷新页面。</p><p class="helper">配置完成后可使用逐条 AI 核查、基于事实资料起草响应、全文 AI 审核。</p>',
+        btn('close', '完成', 'primary'),
+      );
+      break;
+    case 'save-info':
+      openModal(
+        '本机保存',
+        saveError
+          ? '<p class="notice">' +
+              esc(saveError) +
+              '</p><p>修改仍保留在当前页面。可导出备份或另存为新项目。</p>'
+          : '<p>每次编辑后自动保存到当前浏览器。跨电脑或清理浏览器数据前，请导出项目备份。</p>',
+        (p ? btn('backup', '导出项目备份') : '') +
+          (saveError ? btn('save-copy', '另存新项目', 'primary') : btn('close', '完成', 'primary')),
+      );
+      break;
+    case 'save-copy': {
+      const copy = importBackup(exportBackup(p));
+      copy.title = p.title.slice(0, 180) + '（副本）';
+      const saved = await saveProject(copy);
+      clearTimeout(saveTimer);
+      activate(saved);
+      closeModal();
+      notify('已另存为新项目');
+      break;
+    }
+  }
+}
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-action],[data-view],.brand');
+  if (!button) return;
+  if (button.matches('.brand') || button.dataset.view) {
+    event.preventDefault();
+    view = button.dataset.view || 'matrix';
+    render();
+    window.scrollTo(0, 0);
+    return;
+  }
+  handle(button.dataset.action, button).catch((error) => {
+    if (error.name !== 'AbortError') errMessage(error.message || '操作失败，请重试。');
+  });
+});
+document.addEventListener('input', (event) => {
+  const el = event.target;
+  if (el.id === 'search') {
+    state.search = el.value;
+    state.page = 0;
+    renderRows();
+  }
+  if (el.dataset.field && el.tagName !== 'SELECT') edit(el.dataset.field, el.value);
+});
+document.addEventListener('change', async (event) => {
+  const el = event.target;
+  try {
+    if (el.id === 'category' || el.id === 'priority') {
+      state[el.id] = el.value;
+      state.page = 0;
+      renderRows();
+    }
+    if (el.dataset.field && el.tagName === 'SELECT') edit(el.dataset.field, el.value);
+    if (el.dataset.file) await readFile(el);
+    if (el.id === 'review-mode')
+      $('#mode-hint').textContent =
+        el.value === 'ai'
+          ? '点击开始后将向配置的模型服务发送两份完整正文，每份限 60,000 字符。'
+          : '本地核对量化条款与常见材料要求。';
+    if (el.id === 'restore-file' && el.files[0]) {
+      const file = el.files[0];
+      el.value = '';
+      if (file.size > 64 * 1024 * 1024) throw new Error('备份文件过大，请选择完整的项目 JSON。');
+      const copy = importBackup(await file.text());
+      await flush();
+      await switchProject(await saveProject(copy));
+      notify('已将备份恢复为独立项目');
+    }
+  } catch (error) {
+    errMessage(error.message);
   }
 });
-dialog.addEventListener('close',() => {draft = null; abortReview?.abort(); abortReview = null;});
-dialog.addEventListener('change',event => {
-  if (event.target.matches('[data-file]')) readFile(event.target);
-  if (event.target.id === 'review-mode') modeHint();
+dialog.addEventListener('close', () => {
+  activeController?.abort();
+  activeController = null;
+  pendingAI = null;
 });
-render();
-fetch('/api/status').then(response => response.ok ? response.json() : {}).then(status => {
-  aiAvailable = status.ai === true;
-  const aiOption = $('#review-mode option[value="ai"]');
-  if (aiAvailable && aiOption) {
-    aiOption.disabled = false;
-    aiOption.textContent = 'AI 模型审核';
-    modeHint();
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) flush().catch(() => {});
+});
+window.addEventListener('beforeunload', (event) => {
+  if (revision !== committed) {
+    event.preventDefault();
+    event.returnValue = '';
   }
-}).catch(() => {});
+});
+function makeSample() {
+  const requirements = extractRequirements(sample.tender).map((row) => {
+    const line = sample.bid
+      .split('\n')
+      .find((text) => /投标有效期/.test(row.quote) && text.includes('投标有效期'));
+    if (line)
+      return {
+        ...row,
+        owner: '商务组',
+        response: line,
+        evidence: line,
+        sourceLocation: '投标函 · 有效期承诺',
+        status: 'ready',
+      };
+    if (row.quote.includes('交付周期'))
+      return {
+        ...row,
+        owner: '实施组',
+        status: 'draft',
+        response: '计划分阶段完成部署、联调和验收，交付排期待复核。',
+      };
+    return row;
+  });
+  return createProject({
+    ...sample,
+    isSample: true,
+    requirements,
+    findings: review(sample.tender, sample.bid),
+    names: { tender: '能源管理平台采购招标文件（示例）', bid: '能源管理平台投标文件（示例）' },
+    reviewedAt: new Date().toISOString(),
+  });
+}
+async function init() {
+  resetFilters();
+  try {
+    const items = await listProjects();
+    let key = null;
+    try {
+      key = localStorage.getItem('biaoheng.active-project');
+    } catch {}
+    if (items.length) activate(await getProject((items.find((item) => item.id === key) || items[0]).id));
+    else if (key === '') {
+      render();
+      setIndicator('本机项目库', 'saved');
+    } else activate(await saveProject(makeSample()));
+  } catch (error) {
+    activate(makeSample());
+    revision++;
+    saveError = error.message;
+    setIndicator('保存失败 · 查看处理', 'error');
+    notify('本机存储不可用，可从导出菜单备份当前项目。');
+  }
+  try {
+    const response = await fetch('/api/status');
+    ai = response.ok && (await response.json()).ai === true;
+    $('#model-status').innerHTML = icon('sparkle') + (ai ? 'AI 已配置' : 'AI 未配置');
+    if (
+      ai &&
+      !document.activeElement?.matches('input,textarea,select') &&
+      (view === 'matrix' || view === 'writing')
+    )
+      renderInspector();
+  } catch {}
+}
+init();

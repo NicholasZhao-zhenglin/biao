@@ -1,0 +1,8 @@
+.match-shell{border:1px solid #d9e0df;border-radius:8px;padding:11px 13px;margin:12px 0;color:inherit;font-size:14px}
+.match-shell summary{cursor:pointer;font-weight:600}
+.match-controls{display:flex;gap:8px;margin:12px 0}
+.match-controls input{min-width:0;flex:1;border:1px solid #cbd5d5;border-radius:5px;padding:7px;background:#fff}
+.match-shell button{cursor:pointer;border:1px solid #cbd5d5;border-radius:5px;padding:5px 8px;background:#fff;color:inherit;font:inherit;margin-right:5px}
+.match-item{padding:10px 0;border-top:1px solid #e1e5e6}
+.match-item small{color:#52636c}.match-item blockquote{margin:6px 0 8px;color:#364451;white-space:pre-wrap;overflow-wrap:anywhere}
+.match-result:not(:empty){background:#f4f7fa;padding:8px;margin-top:7px;border-radius:4px}

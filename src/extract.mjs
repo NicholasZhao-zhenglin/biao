@@ -122,8 +122,10 @@ async function extractPdf(bytes) {
     if (doc.numPages > maxPages) throw new ImportError('单个 PDF 上限为 200 页，请拆分后导入。');
     const parts = [];
     let length = 0;
+    let readable = false;
     for (let number = 1; number <= doc.numPages; number++) {
       const page = await doc.getPage(number);
+      const pageParts = [];
       const reader = page.streamTextContent().getReader();
       for (;;) {
         const { done, value } = await reader.read();
@@ -133,14 +135,17 @@ async function extractPdf(bytes) {
           const part = item.str + (item.hasEOL ? '\n' : '');
           length += part.length;
           checkLength(length);
-          parts.push(part);
+          pageParts.push(part);
         }
       }
-      parts.push('\n');
+      const pageText = pageParts.join('').trim();
+      if (pageText) readable = true;
+      const note = pageText.replace(/\s/g, '').length < 18 ? '\n〔本页可提取文字很少，请核对原件〕' : '';
+      parts.push('【PDF 第 '+number+' 页】\n'+pageText+note+'\n');
       page.cleanup();
     }
     const text = parts.join('');
-    if (!text.trim()) throw new ImportError('未提取到 PDF 文字。扫描件请先进行 OCR 识别，再上传文字版或粘贴正文。');
+    if (!readable) throw new ImportError('未提取到 PDF 文字。扫描件请先进行 OCR 识别，再上传文字版或粘贴正文。');
     return text;
   } catch (error) {
     if (error.name === 'PasswordException') throw new ImportError('请先解除 PDF 的密码保护。');
