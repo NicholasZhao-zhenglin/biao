@@ -1,0 +1,4 @@
+* text=auto
+*.mjs text eol=lf
+*.bcmap binary
+*.png binary
