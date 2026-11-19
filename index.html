@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f7fb">
+  <title>标衡 · 招投标审核工作台</title>
+  <link rel="stylesheet" href="./src/styles.css">
+</head>
+<body>
+  <header class="site-head">
+    <div class="head-inner">
+      <a class="brand" href="#workspace" aria-label="标衡首页">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <b>标衡</b><span class="brand-divider"></span><span class="brand-en">BIDCHECK</span>
+      </a>
+      <nav aria-label="主导航">
+        <button data-action="workspace" class="nav-link active">审核工作台</button>
+        <button data-action="files" class="nav-link">项目文件</button>
+      </nav>
+      <div class="head-tools"><button data-action="help" class="help"><i data-icon="help"></i><span>使用说明</span></button><span class="avatar" aria-label="当前工作区">审</span></div>
+    </div>
+  </header>
+  <main id="workspace">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-content"><div class="eyebrow"><i class="eyebrow-line"></i>REVIEW WORKSPACE</div>
+        <h1 id="hero-title">招投标审核工作台</h1>
+        <p>比对招标要求与投标响应，逐项核查风险与原文依据。</p>
+        <button class="primary" data-action="new"><i data-icon="plus"></i>新建审核</button>
+      </div>
+      <div class="art" aria-hidden="true">
+        <div class="art-grid"></div><div class="art-orbit orbit-one"></div><div class="art-orbit orbit-two"></div>
+        <div class="art-cross cx-one">+</div><div class="art-cross cx-two">+</div>
+        <div class="paper-shadow"></div>
+        <div class="paper-back"><span></span><b></b><b></b><b></b></div>
+        <div class="paper-front"><div class="paper-label">BID ANALYSIS</div><div class="paper-headline"></div><div class="paper-rule"></div>
+          <div class="paper-row"><i>✓</i><b></b></div><div class="paper-row"><i>✓</i><b></b></div><div class="paper-row"><i>✓</i><b></b></div>
+          <div class="paper-foot"></div>
+        </div>
+        <div class="glass"><i></i><b></b></div>
+      </div>
+    </section>
+    <section class="project-card" aria-labelledby="project-title">
+      <div class="project-summary"><div class="project-top"><span class="project-icon"><i data-icon="folder"></i></span><span>当前审核项目</span><span class="sample-tag" id="sample-tag">示例项目</span></div>
+        <h2 id="project-title"></h2>
+        <div class="project-meta"><button data-action="files"><i data-icon="files"></i>2 份文件</button><span class="dot-sep"></span><span id="mode-label"></span><span class="dot-sep"></span><span class="complete"><i></i>审核完成</span></div>
+      </div>
+      <div class="stats" id="stats" aria-label="审核风险统计"></div>
+    </section>
+    <section class="results" aria-labelledby="results-title">
+      <div class="section-head"><div class="section-title"><span class="title-mark"></span><h2 id="results-title">审核发现</h2><span class="count" id="result-count"></span></div>
+        <div class="section-actions"><button class="text-btn" data-action="redo"><i data-icon="refresh"></i>重新审核</button><button class="outline-btn" data-action="export"><i data-icon="download"></i>导出报告</button></div>
+      </div>
+      <div class="results-grid">
+        <div class="findings-panel"><div class="filters" aria-label="筛选风险" id="filters"></div><div id="findings" class="findings"></div></div>
+        <section class="detail-panel" id="detail" aria-label="审核发现详情"></section>
+      </div>
+    </section>
+    <footer><span class="footer-mark"></span>标衡 <span class="footer-dot">·</span> 招投标文件辅助审核</footer>
+  </main>
+  <dialog id="dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
+  <div id="toast" class="toast" role="status"></div>
+  <script type="module" src="./src/app.mjs"></script>
+</body>
+</html>
